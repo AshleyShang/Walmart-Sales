@@ -1,0 +1,204 @@
+```{r}
+setwd("/Users/boyuanwang/Desktop/425FP/files")
+train <- read.csv("train.csv", stringsAsFactors = FALSE)
+weather <- read.csv("weather.csv", stringsAsFactors = FALSE)
+key <- read.csv("key.csv", stringsAsFactors = FALSE) #the relational mapping between stores and the weather stations that cover them
+test <- read.csv("test.csv", stringsAsFactors = FALSE)
+
+table1 <- merge(key, train)
+table2 <- merge(table1, weather)
+tst1 <- merge(test, key)
+tst2 <- merge(tst1, weather)
+
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(chron)
+library(caret)
+library(RANN)
+```
+```{r}
+table2$month <- substr(table2$date, 6, 7)
+
+holidays <- as.Date(c(NewYears = c("2014-01-01", "2014-12-31",
+                                   "2013-01-01", "2013-12-31",
+                                   "2012-01-01", "2012-12-31"), 
+                      Christmas = c("2014-12-25", "2014-12-24", 
+                                    "2013-12-25", "2014-12-24",
+                                    "2012-12-25", "2014-12-24"), 
+                      ValentinesDay = c("2014-02-14", "2013-02-14", "2012-02-14"),
+                      IndDay = c("2014-07-04", "2013-07-04", "2012-07-04"),
+                      Easter = c("2012-04-08", "2013-03-31", "2014-04-20"),
+                      MothersDay = c("2012-05-13", "2013-05-12", "2014-05-11"),
+                      FathersDay = c("2012-06-17", "2013-06-16", "2014-06-15"),
+                      LaborDay = c("2012-09-03", "2013-09-02", "2014-09-01"),
+                      Halloween = c("2012-10-31", "2013-10-31","2014-10-31"),
+                      Thanksgiving = c("2014-11-27", "2013-11-28", "2012-11-22"),
+                      BlackFriday = c("2012-11-20", "2012-11-21", "2012-11-23", "2012-11-24",
+                                      "2012-11-25", "2012-11-26", "2013-11-26", "2013-11-27",
+                                      "2013-11-28", "2013-11-29", "2013-11-30", "2013-12-01",
+                                      "2013-12-02")))
+                      
+dates <- as.Date(table2$date)
+table2$holiday <- as.numeric(dates %in% holidays)
+```
+```{r}
+
+
+trn <- table2 %>% 
+  dplyr::select(station_nbr, store_nbr, item_nbr, units, tmax, tmin, tavg, 
+         dewpoint, wetbulb, preciptotal, avgspeed, holiday, month) %>% 
+  mutate_each(funs(replace(., .== "M", NA))) %>% 
+  na.omit()
+
+trn$preciptotal[which(trn$preciptotal == "  T")] <- 0.10
+trn$storm <- as.numeric(as.numeric(trn$preciptotal) > 1)
+
+ind <- which(trn$storm == 1)
+idx <- NULL
+for (i in 1 : length(ind)) {
+  idx <- c(idx, (ind[i] + c(-3:3)))
+}
+idx <- unique(idx)
+
+trn$storm[idx] <- 1
+
+trn0 <- trn %>% 
+  mutate_at(vars(matches("_nbr")),funs(factor)) %>% 
+  mutate_at(vars(holiday, storm, month),funs(factor)) %>% 
+  mutate_at(5:11, as.numeric)
+```
+
+```{r}
+trn_final <- trn0 %>% filter(units != 0)
+```
+
+
+```{r}
+
+tst2$holiday <- factor(as.numeric(as.Date(tst2$date) %in% holidays))
+tst2$month <- substr(tst2$date, 6, 7)
+tst <- tst2 %>% 
+  dplyr::select(station_nbr, store_nbr, item_nbr, tmax, tmin, tavg, 
+         dewpoint, wetbulb, preciptotal, avgspeed, holiday, month) %>% 
+  mutate_each(funs(replace(., .== "M", NA))) #%>% 
+  #na.omit()
+tst$preciptotal[which(tst$preciptotal == "  T")] <- 0.10
+
+tst0 <- tst %>% 
+  mutate_at(vars(matches("_nbr")),funs(factor)) %>% 
+  mutate_at(vars(holiday, month),funs(factor)) %>% 
+  mutate_at(4:10, as.numeric)
+```
+```{r}
+tst$storm <- factor(as.numeric(as.numeric(tst$preciptotal) > 1))
+ind <- which(tst$storm == 1)
+idx <- NULL
+for (i in 1 : length(ind)) {
+  idx <- c(idx, (ind[i] + c(-3:3)))
+}
+idx <- unique(idx)
+tst$storm[idx] <- 1
+
+tst0 <- tst %>% 
+  mutate_at(vars(matches("_nbr")),funs(factor)) %>% 
+  mutate_at(vars(holiday, storm, month),funs(factor)) %>% 
+  mutate_at(4:10, as.numeric)
+
+
+ind <- which(tst0$storm == 1)
+idx <- NULL
+for (i in 1 : length(ind)) {
+  idx <- c(idx, (ind[i] + c(-3:3)))
+}
+idx <- unique(idx)
+tst_final <- tst0[idx,]
+```
+
+```{r}
+library(ggplot2)
+
+p1 = trn0 %>%
+     ggplot(aes(x = station_nbr, fill = station_nbr)) +
+     geom_bar() +
+     labs(fill = "Station Number", x = "")
+p2 = trn0 %>%
+     ggplot(aes(x = store_nbr, fill = store_nbr)) +
+     geom_bar() +
+     labs(fill = "Store Number", x = "")
+
+p3 = weather %>%
+     ggplot(aes(x = tavg, fill = tavg)) +
+     geom_bar() +
+     labs(fill = "Average Temperaturee", x = "")
+
+p4 = trn0 %>%
+     ggplot(aes(x = dewpoint, fill = dewpoint)) +
+     geom_bar() +
+     labs(fill = "Store Number", x = "")
+
+p5 = trn0 %>%
+     ggplot(aes(x = wetbulb, fill = wetbulb)) +
+     geom_bar() +
+     labs(fill = "Store Number", x = "")
+
+
+p6 = trn0%>%
+     ggplot(aes(x = preciptotal, fill = station_nbr)) +
+     geom_density() +
+     labs(fill = "Store Number", x = "")
+
+p7 = trn0 %>%
+     ggplot(aes(y = tavg, x = log(units+1)))+
+  geom_line()
+```
+
+
+```{r}
+rf_mod <- train(units ~ ., data = training,
+                      trControl = trainControl(method = "oob"),
+                      method = "rf")
+```
+
+
+```{r}
+lm_mod <- lm(log(units + 1) ~ station_nbr + store_nbr + item_nbr + tmax + tmin+  tavg+  
+         dewpoint+  wetbulb+ avgspeed, data = training)
+
+lm_pred <- round(exp(predict(lm_mod, tst0)) - 1) 
+ind <- is.na(lm_pred)
+lm_pred[ind] <- 0
+
+write.csv(lm_pred, file = "lm_results", row.names = F)
+```
+
+
+```{r}
+boosting_mod <- train(log(units + 1) ~ . - storm, data = training,
+                      trControl = trainControl(method = "cv", number = 5),
+                      method = "gbm", verbose = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
